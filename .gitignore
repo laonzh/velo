@@ -1,0 +1,62 @@
+# .NET build & publish
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+artifacts/
+.artifacts/
+*.binlog
+MSBuild_Logs/
+project.lock.json
+project.fragment.lock.json
+
+# Native / AOT & debug symbols (publish output usually under bin/)
+*.dll
+*.exe
+*.pdb
+*.dylib
+*.so
+*.dSYM/
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+
+# Visual Studio / Rider
+.vs/
+*.user
+*.userosscache
+*.suo
+*.rsuser
+*.sln.docstates
+.idea/
+*.DotSettings.user
+
+# VS Code (keep shared debug/task config)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+.history/
+
+# Secrets & local env (commit .env.example as template)
+.env
+.env.*
+!.env.example
+**/secrets.json
+*.pfx
+
+# Velo local runtime state (workspaces live outside the repo)
+.velo/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tools
+.dotnet/
