@@ -2,6 +2,6 @@ namespace Velo.Abstractions;
 
 public interface IWorkspaceManager
 {
-    Task<string> AcquireAsync(string workItemId, IReadOnlyDictionary<string, string>? metadata, CancellationToken cancellationToken = default);
-    Task ReleaseAsync(string workItemId, CancellationToken cancellationToken = default);
+    Task<string> AcquireAsync(WorkItem workItem, CancellationToken cancellationToken = default);
+    Task ReleaseAsync(WorkItem workItem, bool success, CancellationToken cancellationToken = default);
 }

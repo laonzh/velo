@@ -1,6 +1,7 @@
 namespace Velo.Abstractions;
 
 public sealed record WorkItem(
+    string ProjectId,
     string Id,
     string Title,
     string Description,
@@ -8,9 +9,7 @@ public sealed record WorkItem(
     IReadOnlyDictionary<string, string>? Metadata);
 
 public sealed record AgentRunContext(
-    string WorkItemId,
-    string WorkItemTitle,
-    string WorkItemDescription,
+    WorkItem WorkItem,
     string WorkspacePath,
     ILogWriter Logger);
 

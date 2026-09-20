@@ -1,2 +1,15 @@
-﻿// See https://aka.ms/new-console-template for more information
-Console.WriteLine("Hello, World!");
+using Velo.Cli;
+
+try
+{
+    return await CliApp.RunAsync(args).ConfigureAwait(false);
+}
+catch (OperationCanceledException)
+{
+    return 0;
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"Error: {ex.Message}");
+    return 1;
+}
