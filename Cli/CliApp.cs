@@ -15,7 +15,7 @@ public static class CliApp
             return 0;
         }
 
-        VeloPaths.EnsureInitialized();
+        VeloConfig.EnsureInitialized();
 
         return args[0] switch
         {
@@ -61,7 +61,7 @@ public static class CliApp
         FileStream? pidFile = null;
         try
         {
-            pidFile = new FileStream(VeloPaths.PidFile, FileMode.Create, FileAccess.ReadWrite, FileShare.Read);
+            pidFile = new FileStream(VeloConfig.PidFile, FileMode.Create, FileAccess.ReadWrite, FileShare.Read);
             using var sw = new StreamWriter(pidFile, Encoding.ASCII, 32, true);
             sw.Write(Environment.ProcessId);
             sw.Flush();
@@ -79,7 +79,7 @@ public static class CliApp
         {
             while (!cts.IsCancellationRequested)
             {
-                if (File.Exists(VeloPaths.StopFlag)) { cts.Cancel(); break; }
+                if (File.Exists(VeloConfig.StopFlag)) { cts.Cancel(); break; }
                 await Task.Delay(500).ConfigureAwait(false);
             }
         });
@@ -92,8 +92,8 @@ public static class CliApp
         finally
         {
             pidFile?.Dispose();
-            File.Delete(VeloPaths.PidFile);
-            File.Delete(VeloPaths.StopFlag);
+            File.Delete(VeloConfig.PidFile);
+            File.Delete(VeloConfig.StopFlag);
         }
 
         return 0;
@@ -109,7 +109,7 @@ public static class CliApp
                 Console.Error.WriteLine("Error: velo is not running.");
                 return 0;
             }
-            File.WriteAllText(VeloPaths.StopFlag, string.Empty);
+            File.WriteAllText(VeloConfig.StopFlag, string.Empty);
             using var process = Process.GetProcessById(pid);
             if (process == null || process.HasExited)
             {
@@ -120,8 +120,8 @@ public static class CliApp
             if (!process.WaitForExit(10000))
             {
                 process.Kill(true);
-                File.Delete(VeloPaths.PidFile);
-                File.Delete(VeloPaths.StopFlag);
+                File.Delete(VeloConfig.PidFile);
+                File.Delete(VeloConfig.StopFlag);
             }
             Console.WriteLine("velo stopped.");
             return 0;
@@ -156,10 +156,10 @@ public static class CliApp
 
     private static int GetRunningPid()
     {
-        if (!File.Exists(VeloPaths.PidFile)) return 0;
+        if (!File.Exists(VeloConfig.PidFile)) return 0;
         try
         {
-            using var fs = new FileStream(VeloPaths.PidFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var fs = new FileStream(VeloConfig.PidFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var sr = new StreamReader(fs);
             var pid = sr.ReadToEnd().Trim();
             if (!string.IsNullOrWhiteSpace(pid) && int.TryParse(pid, out var pidInt) && pidInt > 0)
