@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using Velo.Abstractions;
+using Velo.Configuration;
 
 namespace Velo.Common;
 
@@ -48,7 +49,7 @@ public static class Utils
         ILogWriter? log = null,
         CancellationToken cancellationToken = default)
     {
-        var executable = Utils.ResolveExecutable(fileName);
+        var executable = ResolveExecutable(fileName);
         var startInfo = new ProcessStartInfo()
         {
             FileName = executable,
@@ -110,6 +111,28 @@ public static class Utils
             }
             log?.Write("ERROR", $"Failed to run process: {ex.Message}");
             return new(false, string.Empty, ex.Message);
+        }
+    }
+
+
+    public static int GetRunningPid()
+    {
+        if (!File.Exists(VeloConfig.PidFile)) return 0;
+        try
+        {
+            using var fs = new FileStream(VeloConfig.PidFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var sr = new StreamReader(fs);
+            var pid = sr.ReadToEnd().Trim();
+            if (!string.IsNullOrWhiteSpace(pid) && int.TryParse(pid, out var pidInt) && pidInt > 0)
+            {
+                using var process = Process.GetProcessById(pidInt);
+                return process != null && !process.HasExited ? pidInt : 0;
+            }
+            return 0;
+        }
+        catch
+        {
+            return 0;
         }
     }
 }
