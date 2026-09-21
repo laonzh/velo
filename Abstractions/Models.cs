@@ -18,3 +18,5 @@ public sealed record AgentRunResult(
     int ExitCode,
     TimeSpan Elapsed,
     string? ErrorMessage);
+
+public sealed record ProcessResult(bool Success, string Output, string Error);
