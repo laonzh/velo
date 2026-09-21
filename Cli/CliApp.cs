@@ -19,7 +19,7 @@ public static class CliApp
 
         return args[0] switch
         {
-            "start" => await HandleStartAsync(args).ConfigureAwait(false),
+            "start" => await HandleStartAsync(args[1..]).ConfigureAwait(false),
             "proj" or "p" => await ProjCommand.RunAsync(args[1..]).ConfigureAwait(false),
             "work" or "w" => await WorkCommand.RunAsync(args[1..]).ConfigureAwait(false),
             "stop" => HandleStop(),
@@ -45,7 +45,7 @@ public static class CliApp
         if (args.Contains("-d") || args.Contains("--daemon"))
         {
             var executable = Environment.ProcessPath;
-            var cleanArgs = string.Join(" ", args.Where(x => x is not ("-d" or "--daemon")));
+            var cleanArgs = "start " + string.Join(" ", args.Where(x => x is not ("-d" or "--daemon")));
             var p = Process.Start(new ProcessStartInfo()
             {
                 FileName = executable,
@@ -65,10 +65,6 @@ public static class CliApp
             using var sw = new StreamWriter(pidFile, Encoding.ASCII, 32, true);
             sw.Write(Environment.ProcessId);
             sw.Flush();
-            if (File.Exists(VeloPaths.StopFlag))
-            {
-                File.Delete(VeloPaths.StopFlag);
-            }
         }
         catch (IOException)
         {
@@ -160,20 +156,13 @@ public static class CliApp
 
     private static int GetRunningPid()
     {
-        if (!File.Exists(VeloPaths.PidFile))
-        {
-            return 0;
-        }
+        if (!File.Exists(VeloPaths.PidFile)) return 0;
         try
         {
             using var fs = new FileStream(VeloPaths.PidFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var sr = new StreamReader(fs);
-            var pid = sr.ReadToEnd();
-            if (string.IsNullOrEmpty(pid))
-            {
-                return 0;
-            }
-            if (int.TryParse(pid, out var pidInt) && pidInt > 0)
+            var pid = sr.ReadToEnd().Trim();
+            if (!string.IsNullOrWhiteSpace(pid) && int.TryParse(pid, out var pidInt) && pidInt > 0)
             {
                 using var process = Process.GetProcessById(pidInt);
                 return process != null && !process.HasExited ? pidInt : 0;
