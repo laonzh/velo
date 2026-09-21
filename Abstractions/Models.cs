@@ -5,17 +5,18 @@ public sealed record TaskItem(
     string Title,
     string Description,
     string Source,
-    IReadOnlyDictionary<string, string>? Metadata);
+    IReadOnlyDictionary<string, string>? Metadata = null);
 
 public sealed record AgentRunContext(
-    TaskItem TaskItem,
+    string TaskId,
+    string TaskTitle,
+    string TaskDescription,
     string WorkspacePath,
     ILogWriter Logger);
 
 public sealed record AgentRunResult(
     bool Success,
-    int ExitCode,
     TimeSpan Elapsed,
-    string? ErrorMessage);
+    string? ErrorMessage = null);
 
 public sealed record ProcessResult(bool Success, string Output, string Error);

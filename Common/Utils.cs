@@ -42,7 +42,7 @@ public static class Utils
         return executable;
     }
 
-    public static async Task<ProcessResult> RunAsync(
+    public static async Task<ProcessResult> ProcessRunAsync(
         string fileName,
         IReadOnlyList<string> args,
         string? workingDir = null,

@@ -25,6 +25,75 @@ public static class StartCommand
             return 0;
         }
 
+        var maxConcurrency = 3;
+        var pollingInterval = TimeSpan.FromSeconds(3);
+        var taskTimeout = TimeSpan.FromMinutes(30);
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            var key = args[i];
+            string? value = null;
+            var idx = key.IndexOf('=');
+            if (idx > 0)
+            {
+                key = key[..idx];
+                value = key[(idx + 1)..];
+            }
+            else
+            {
+                if (i + 1 < args.Length)
+                {
+                    value = args[++i];
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                Console.Error.WriteLine($"Missing value for option: {key}");
+                return 1;
+            }
+
+            switch (key)
+            {
+                case "-c":
+                case "--concurrency":
+                    if (!int.TryParse(value, out var concurrency))
+                    {
+                        Console.Error.WriteLine($"Invalid value for option: {key}");
+                        return 1;
+                    }
+                    maxConcurrency = concurrency;
+                    break;
+                case "-i":
+                case "--interval":
+                    if (!TimeSpan.TryParse(value, out var interval))
+                    {
+                        Console.Error.WriteLine($"Invalid value for option: {key}");
+                        return 1;
+                    }
+                    pollingInterval = interval;
+                    break;
+                case "-t":
+                case "--timeout":
+                    if (!TimeSpan.TryParse(value, out var timeout))
+                    {
+                        Console.Error.WriteLine($"Invalid value for option: {key}");
+                        return 1;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        var config = new VeloConfig()
+        {
+            DefaultAgent = "codex",
+            MaxConcurrency = maxConcurrency,
+            PollingInterval = pollingInterval,
+            TaskTimeout = taskTimeout,
+        };
+
         FileStream? pidFile = null;
         try
         {
@@ -53,7 +122,7 @@ public static class StartCommand
 
         try
         {
-            var engine = new VeloEngine();
+            var engine = new VeloEngine(config);
             await engine.StartAsync(cts.Token).ConfigureAwait(false);
         }
         finally
