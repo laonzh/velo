@@ -1,8 +1,8 @@
-using Velo.Cli;
+using Velo;
 
 try
 {
-    return await CliApp.RunAsync(args).ConfigureAwait(false);
+    return await new Cli().RunAsync(args);
 }
 catch (OperationCanceledException)
 {
