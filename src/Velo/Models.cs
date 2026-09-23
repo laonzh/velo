@@ -16,7 +16,8 @@ public sealed record TaskItem(
     string WorkspacePath,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc,
-    string? LastError = null);
+    string? LastError = null,
+    bool Unsafe = false);
 
 public sealed record TaskEntry(string Id, TaskState State, TaskItem Item);
 

@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/Velo/velo.csproj" />
+  <Project Path="tests/Velo.FakeCodex/Velo.FakeCodex.csproj" />
+  <Project Path="tests/Velo.Tests/Velo.Tests.csproj" />
+</Solution>

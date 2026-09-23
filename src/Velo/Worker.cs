@@ -11,7 +11,7 @@ public sealed class Worker(TaskStore store, int concurrency, TimeSpan timeout)
     {
         store.Initialize();
         var recovered = store.RecoverRunning();
-        var running = new Dictionary<string, (string Workspace, Task Run)>();
+        var running = new Dictionary<string, (string LockKey, Task Run)>();
         VeloPaths.WriteLog("INFO", $"Worker started (concurrency={concurrency}, timeout={timeout:c}).");
         if (recovered > 0)
             VeloPaths.WriteLog("INFO", $"Recovered {recovered} running task(s) to todo.");
@@ -25,14 +25,14 @@ public sealed class Worker(TaskStore store, int concurrency, TimeSpan timeout)
                 foreach (var task in store.Pending(int.MaxValue))
                 {
                     if (running.Count >= concurrency) break;
-                    var workspace = NormalizeWorkspace(task.Item.WorkspacePath);
+                    var lockKey = WorkspaceLockKey(task.Item.WorkspacePath);
                     if (running.Values.Any(run =>
-                        WorkspaceComparer.Equals(run.Workspace, workspace))) continue;
+                        WorkspaceComparer.Equals(run.LockKey, lockKey))) continue;
                     if (!store.Claim(task.Id)) continue;
 
                     var claimed = store.Get(task.Id)!;
                     VeloPaths.WriteLog("INFO", $"Task {task.Id} started.");
-                    running.Add(task.Id, (workspace, RunTaskAsync(claimed, cancellationToken)));
+                    running.Add(task.Id, (lockKey, RunTaskAsync(claimed, cancellationToken)));
                 }
 
                 if (running.Count == 0)
@@ -53,6 +53,9 @@ public sealed class Worker(TaskStore store, int concurrency, TimeSpan timeout)
         finally
         {
             await Task.WhenAll(running.Values.Select(run => run.Run));
+            var requeued = store.RecoverRunning();
+            if (requeued > 0)
+                VeloPaths.WriteLog("INFO", $"Returned {requeued} interrupted task(s) to todo.");
             VeloPaths.WriteLog("INFO", "Worker stopped.");
         }
     }
@@ -116,11 +119,25 @@ public sealed class Worker(TaskStore store, int concurrency, TimeSpan timeout)
         }
     }
 
+    private static string WorkspaceLockKey(string path)
+    {
+        var workspace = NormalizeWorkspace(path);
+        for (var directory = new DirectoryInfo(workspace);
+             directory is not null;
+             directory = directory.Parent)
+        {
+            var gitEntry = Path.Combine(directory.FullName, ".git");
+            if (Directory.Exists(gitEntry) || File.Exists(gitEntry))
+                return NormalizeWorkspace(directory.FullName);
+        }
+        return workspace;
+    }
+
     private static string NormalizeWorkspace(string path) =>
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 
     private static async Task RemoveCompletedAsync(
-        Dictionary<string, (string Workspace, Task Run)> running)
+        Dictionary<string, (string LockKey, Task Run)> running)
     {
         foreach (var (id, run) in running.Where(pair => pair.Value.Run.IsCompleted).ToArray())
         {

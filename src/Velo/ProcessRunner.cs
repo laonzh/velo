@@ -31,6 +31,7 @@ public static class ProcessRunner
         }
 
         var startInfo = CreateStartInfo(fileName, arguments, workingDirectory);
+        Write("INFO", $"Starting: {fileName} {string.Join(' ', arguments)}");
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start()) throw new InvalidOperationException($"Failed to start {fileName}.");
 
@@ -63,9 +64,14 @@ public static class ProcessRunner
         string workingDirectory)
     {
         var executable = ResolveExecutable(fileName);
+        var isWindowsCommandScript = OperatingSystem.IsWindows()
+            && (Path.GetExtension(executable).Equals(".cmd", StringComparison.OrdinalIgnoreCase)
+                || Path.GetExtension(executable).Equals(".bat", StringComparison.OrdinalIgnoreCase));
         var startInfo = new ProcessStartInfo
         {
-            FileName = executable,
+            FileName = isWindowsCommandScript
+                ? Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
+                : executable,
             WorkingDirectory = workingDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -77,7 +83,15 @@ public static class ProcessRunner
             StandardErrorEncoding = new UTF8Encoding(false)
         };
 
-        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        if (isWindowsCommandScript)
+        {
+            startInfo.Arguments =
+                $"/d /s /c \"chcp 65001 >nul & call \"{executable}\" {string.Join(' ', arguments)}\"";
+        }
+        else
+        {
+            foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        }
         return startInfo;
     }
 
@@ -111,10 +125,21 @@ public static class ProcessRunner
 
 public static class CodexRunner
 {
-    private static readonly string[] Arguments =
+    private static readonly string[] SafeArguments =
+    [
+        "exec",
+        "--sandbox", "workspace-write",
+        "--approve-for-me",
+        "--skip-git-repo-check",
+        "--color", "never",
+        "-"
+    ];
+
+    private static readonly string[] UnsafeArguments =
     [
         "exec",
         "--dangerously-bypass-approvals-and-sandbox",
+        "--skip-git-repo-check",
         "--color", "never",
         "-"
     ];
@@ -124,7 +149,7 @@ public static class CodexRunner
         CancellationToken cancellationToken) =>
         ProcessRunner.RunAsync(
             "codex",
-            Arguments,
+            task.Item.Unsafe ? UnsafeArguments : SafeArguments,
             task.Item.WorkspacePath,
             task.Item.Title,
             VeloPaths.LogFile(task.Id),

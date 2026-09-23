@@ -14,14 +14,14 @@ public sealed class TaskStore
         return $"{now:yyyyMMddHHmmss}-{Guid.NewGuid():N}"[..23];
     }
 
-    public TaskEntry Add(string title, string workspacePath)
+    public TaskEntry Add(string title, string workspacePath, bool unsafeExecution = false)
     {
         while (true)
         {
             var id = NewId();
             try
             {
-                return Add(id, title, workspacePath);
+                return Add(id, title, workspacePath, unsafeExecution);
             }
             catch (IOException) when (FindState(id) is not null)
             {
@@ -29,11 +29,20 @@ public sealed class TaskStore
         }
     }
 
-    internal TaskEntry Add(string id, string title, string workspacePath)
+    internal TaskEntry Add(
+        string id,
+        string title,
+        string workspacePath,
+        bool unsafeExecution = false)
     {
         ValidateId(id);
         var now = DateTimeOffset.UtcNow;
-        var item = new TaskItem(title, Path.GetFullPath(workspacePath), now, now);
+        var item = new TaskItem(
+            title,
+            Path.GetFullPath(workspacePath),
+            now,
+            now,
+            Unsafe: unsafeExecution);
         Write(VeloPaths.TaskFile(TaskState.Todo, id), item, overwrite: false);
         return new TaskEntry(id, TaskState.Todo, item);
     }
@@ -70,6 +79,25 @@ public sealed class TaskStore
     public bool Retry(string id) =>
         Move(id, [TaskState.Failed, TaskState.Cancelled], TaskState.Todo, clearError: true);
 
+    public bool Remove(string id, TaskState state)
+    {
+        ValidateId(id);
+        var path = VeloPaths.TaskFile(state, id);
+        if (!File.Exists(path)) return false;
+        try
+        {
+            File.Delete(path);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
     public int RecoverRunning()
     {
         var count = 0;

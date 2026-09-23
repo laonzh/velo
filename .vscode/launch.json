@@ -6,7 +6,7 @@
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
-            "program": "${workspaceFolder}/bin/Debug/net10.0/velo.dll",
+            "program": "${workspaceFolder}/src/Velo/bin/Debug/net10.0/velo.dll",
             "args": [],
             "cwd": "${workspaceFolder}",
             "console": "internalConsole",
