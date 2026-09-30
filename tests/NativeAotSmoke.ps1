@@ -5,164 +5,98 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$projectPath = Join-Path $repositoryRoot 'src\Velo\velo.csproj'
-$fakeCodexProject = Join-Path $repositoryRoot 'tests\Velo.FakeCodex\Velo.FakeCodex.csproj'
-$publishDirectory = Join-Path $repositoryRoot 'src\Velo\bin\Release\net10.0\win-x64\publish'
-$veloExecutable = Join-Path $publishDirectory 'velo.exe'
-$fakeCodexOutput = Join-Path $repositoryRoot 'tests\Velo.FakeCodex\bin\Release\net10.0'
-$smokeRootParent = Join-Path ([IO.Path]::GetTempPath()) 'Velo.NativeAotSmoke'
-$smokeRoot = Join-Path $smokeRootParent ([Guid]::NewGuid().ToString('N'))
+$project = Join-Path $repositoryRoot 'src\Velo\Velo.csproj'
+$smokeParent = Join-Path ([IO.Path]::GetTempPath()) 'Velo.NativeAotSmoke'
+$smokeRoot = Join-Path $smokeParent ([Guid]::NewGuid().ToString('N'))
+$publishDirectory = Join-Path $smokeRoot 'publish'
+$velo = Join-Path $publishDirectory 'velo.exe'
 $veloHome = Join-Path $smokeRoot 'home'
-$fakeBin = Join-Path $smokeRoot 'fake-bin'
-$workerStarted = $false
-
-function Invoke-DotNet {
-    param([string[]] $Arguments)
-
-    & dotnet @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "dotnet $($Arguments -join ' ') exited with $LASTEXITCODE."
-    }
-}
+$workspace = Join-Path $smokeRoot 'workspace'
+$fakeBin = Join-Path $smokeRoot 'bin'
 
 function Invoke-Velo {
-    param(
-        [string[]] $Arguments,
-        [bool] $RedirectOutput = $true
-    )
+    param([string[]] $Arguments)
 
-    $startInfo = [Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $veloExecutable
-    $startInfo.WorkingDirectory = $repositoryRoot
+    $startInfo = [Diagnostics.ProcessStartInfo]::new($velo)
+    $startInfo.WorkingDirectory = $workspace
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $RedirectOutput
-    $startInfo.RedirectStandardError = $RedirectOutput
-    if ($RedirectOutput) {
-        $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
-        $startInfo.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
-    }
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
     $startInfo.Environment['VELO_HOME'] = $veloHome
     $startInfo.Environment['PATH'] = $fakeBin + [IO.Path]::PathSeparator + $env:PATH
     foreach ($argument in $Arguments) {
         [void] $startInfo.ArgumentList.Add($argument)
     }
 
-    $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
-    if (-not $process.Start()) {
-        throw "Failed to start published Velo executable."
+    $process = [Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $process) {
+        throw 'Failed to start the published Velo executable.'
     }
 
-    $standardOutput = if ($RedirectOutput) {
-        $process.StandardOutput.ReadToEndAsync()
-    } else {
-        $null
-    }
-    $standardError = if ($RedirectOutput) {
-        $process.StandardError.ReadToEndAsync()
-    } else {
-        $null
-    }
+    $output = $process.StandardOutput.ReadToEndAsync()
+    $errorOutput = $process.StandardError.ReadToEndAsync()
     if (-not $process.WaitForExit(30000)) {
         $process.Kill($true)
         $process.WaitForExit()
+        $process.Dispose()
         throw "Published Velo command timed out: $($Arguments -join ' ')"
     }
 
-    $result = [pscustomobject]@{
-        ExitCode = $process.ExitCode
-        StandardOutput = if ($RedirectOutput) {
-            $standardOutput.GetAwaiter().GetResult()
-        } else {
-            [string]::Empty
-        }
-        StandardError = if ($RedirectOutput) {
-            $standardError.GetAwaiter().GetResult()
-        } else {
-            [string]::Empty
-        }
-    }
+    $result = $output.GetAwaiter().GetResult()
+    $errorText = $errorOutput.GetAwaiter().GetResult()
+    $exitCode = $process.ExitCode
     $process.Dispose()
-
-    if ($result.ExitCode -ne 0) {
-        throw "Published Velo command failed: $($Arguments -join ' ')`nstdout: $($result.StandardOutput)`nstderr: $($result.StandardError)"
+    if ($exitCode -ne 0) {
+        throw "Published Velo command failed: $($Arguments -join ' ')`n$errorText"
     }
     return $result
 }
 
-function Wait-ForPath {
-    param(
-        [string] $Path,
-        [string] $Description
-    )
-
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
-    while ([DateTime]::UtcNow -lt $deadline) {
-        if (Test-Path -LiteralPath $Path) {
-            return
-        }
-        Start-Sleep -Milliseconds 100
-    }
-    throw "Timed out waiting for $Description at $Path."
-}
-
 try {
-    Invoke-DotNet -Arguments @('publish', $projectPath, '-c', 'Release', '-r', 'win-x64')
-    Invoke-DotNet -Arguments @('build', $fakeCodexProject, '-c', 'Release')
+    New-Item -ItemType Directory -Path $smokeRoot, $veloHome, $workspace, $fakeBin | Out-Null
 
-    if (-not (Test-Path -LiteralPath $veloExecutable -PathType Leaf)) {
-        throw "Native AOT executable was not produced: $veloExecutable"
+    & dotnet publish $project -c Release -r win-x64 -o $publishDirectory
+    if ($LASTEXITCODE -ne 0) {
+        throw "Native AOT publish failed with exit code $LASTEXITCODE."
+    }
+    if (-not (Test-Path -LiteralPath $velo -PathType Leaf)) {
+        throw "Native AOT executable was not produced: $velo"
     }
 
-    New-Item -ItemType Directory -Path $veloHome, $fakeBin | Out-Null
-    Copy-Item -Path (Join-Path $fakeCodexOutput '*') -Destination $fakeBin
-    Copy-Item -LiteralPath (Join-Path $fakeCodexOutput 'Velo.FakeCodex.exe') `
-        -Destination (Join-Path $fakeBin 'codex.exe')
+    Set-Content -LiteralPath (Join-Path $fakeBin 'codex.cmd') `
+        -Value '@echo off', 'more > codex-ran.txt' -Encoding ascii
 
-    $help = Invoke-Velo -Arguments @('--help')
-    if (-not $help.StandardOutput.Contains('Usage: velo <command> [options]')) {
-        throw 'Published executable did not print the expected help output.'
+    if (-not (Invoke-Velo @('--help')).Contains('velo run')) {
+        throw 'Published executable did not expose the run command.'
     }
 
-    $add = Invoke-Velo -Arguments @('add', 'b13-native-aot')
-    $taskId = $add.StandardOutput.Trim()
-    if ([string]::IsNullOrWhiteSpace($taskId)) {
-        throw 'Published executable did not return a task ID.'
+    $workId = (Invoke-Velo @('add', '--', 'native-aot-smoke')).Trim()
+    if ([string]::IsNullOrWhiteSpace($workId)) {
+        throw 'Published executable did not return a work ID.'
     }
 
-    [void] (Invoke-Velo -Arguments @('start', '--timeout', '00:01:00') -RedirectOutput $false)
-    $workerStarted = $true
-    Wait-ForPath -Path (Join-Path $veloHome "tasks\done\$taskId.json") `
-        -Description 'the Native AOT task to complete'
-    Wait-ForPath -Path (Join-Path $veloHome 'b13-native-aot.completed') `
-        -Description 'the fake Codex completion marker'
-
-    $show = Invoke-Velo -Arguments @('show', $taskId)
-    if (-not $show.StandardOutput.Contains('State: done')) {
-        throw 'Published executable did not report the completed task as done.'
+    [void] (Invoke-Velo @('run'))
+    $work = Get-Content -LiteralPath (Join-Path $veloHome "work\$workId.json") -Raw |
+        ConvertFrom-Json
+    if ($work.state -ne 'succeeded') {
+        throw "Native AOT work finished in state: $($work.state)"
     }
-    if (-not $show.StandardOutput.Contains('Prompt: b13-native-aot')) {
-        throw 'Published executable did not preserve the task prompt.'
+    if (-not (Test-Path -LiteralPath (Join-Path $workspace 'codex-ran.txt'))) {
+        throw 'The published executable did not invoke Codex in the workspace.'
     }
 
-    [void] (Invoke-Velo -Arguments @('stop'))
-    $workerStarted = $false
-    Write-Output "Native AOT smoke test passed: $veloExecutable"
+    Write-Output "Native AOT smoke test passed: $velo"
 }
 finally {
-    if ($workerStarted -or (Test-Path -LiteralPath (Join-Path $veloHome 'velo.pid'))) {
-        try { [void] (Invoke-Velo -Arguments @('stop')) } catch { }
-    }
-
     if (Test-Path -LiteralPath $smokeRoot) {
         $resolvedRoot = [IO.Path]::GetFullPath($smokeRoot)
-        $resolvedParent = [IO.Path]::GetFullPath($smokeRootParent).TrimEnd('\') + '\'
+        $resolvedParent = [IO.Path]::GetFullPath($smokeParent).TrimEnd('\') + '\'
         if (-not $resolvedRoot.StartsWith($resolvedParent, [StringComparison]::OrdinalIgnoreCase)) {
             throw "Refusing to remove unexpected smoke-test path: $resolvedRoot"
         }
 
-        for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        for ($attempt = 0; ; $attempt++) {
             try {
                 [IO.Directory]::Delete($resolvedRoot, $true)
                 break

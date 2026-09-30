@@ -3,54 +3,58 @@ using System.Text;
 
 namespace Velo;
 
-public static class ProcessRunner
+internal sealed class AgentRunner(Config config)
 {
-    public static async Task<ProcessResult> RunAsync(
-        string fileName,
-        IReadOnlyList<string> arguments,
-        string workingDirectory,
-        string standardInput,
-        string logPath,
-        CancellationToken cancellationToken)
+    private static readonly string[] Arguments =
+    [
+        "exec",
+        "--approve-for-me",
+        "--skip-git-repo-check",
+        "--color", "never",
+        "-"
+    ];
+
+    public async Task<RunResult> RunAsync(WorkItem work, CancellationToken cancellationToken)
     {
+        var logPath = config.LogFile(work.Id);
         Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
         using var log = new StreamWriter(
             new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite),
             new UTF8Encoding(false))
         { AutoFlush = true };
         var logLock = new object();
-        string? lastError = null;
+        string? error = null;
 
         void Write(string level, string line)
         {
             lock (logLock)
             {
                 log.WriteLine($"[{DateTimeOffset.UtcNow:O}] [{level}] {line}");
-                if (level == "ERROR" && !string.IsNullOrWhiteSpace(line)) lastError = line;
+                if (level == "ERROR" && !string.IsNullOrWhiteSpace(line)) error ??= line;
             }
         }
 
-        var startInfo = CreateStartInfo(fileName, arguments, workingDirectory);
-        Write("INFO", $"Starting: {fileName} {string.Join(' ', arguments)}");
-        using var process = new Process { StartInfo = startInfo };
-        if (!process.Start()) throw new InvalidOperationException($"Failed to start {fileName}.");
+        Write("INFO", $"Starting: codex {string.Join(' ', Arguments)}");
+        using var process = new Process { StartInfo = CreateStartInfo(work.Workspace) };
+        if (!process.Start()) throw new InvalidOperationException("Failed to start codex.");
 
         var outputTask = PumpAsync(process.StandardOutput, line => Write("INFO", line));
         var errorTask = PumpAsync(process.StandardError, line => Write("ERROR", line));
-        await process.StandardInput.WriteAsync(standardInput);
-        process.StandardInput.Close();
 
         try
         {
+            await process.StandardInput.WriteAsync(work.Prompt).WaitAsync(cancellationToken);
+            process.StandardInput.Close();
             await process.WaitForExitAsync(cancellationToken);
             await Task.WhenAll(outputTask, errorTask);
-            return new ProcessResult(process.ExitCode, lastError);
+            return new RunResult(process.ExitCode, error);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             if (!process.HasExited)
             {
-                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                try { process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { }
             }
             await process.WaitForExitAsync(CancellationToken.None);
             await Task.WhenAll(outputTask, errorTask);
@@ -58,21 +62,19 @@ public static class ProcessRunner
         }
     }
 
-    private static ProcessStartInfo CreateStartInfo(
-        string fileName,
-        IReadOnlyList<string> arguments,
-        string workingDirectory)
+    private static ProcessStartInfo CreateStartInfo(string workspace)
     {
-        var executable = ResolveExecutable(fileName);
-        var isWindowsCommandScript = OperatingSystem.IsWindows()
+        var executable = ResolveCodex();
+        var isCommandScript = OperatingSystem.IsWindows()
             && (Path.GetExtension(executable).Equals(".cmd", StringComparison.OrdinalIgnoreCase)
                 || Path.GetExtension(executable).Equals(".bat", StringComparison.OrdinalIgnoreCase));
+
         var startInfo = new ProcessStartInfo
         {
-            FileName = isWindowsCommandScript
+            FileName = isCommandScript
                 ? Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
                 : executable,
-            WorkingDirectory = workingDirectory,
+            WorkingDirectory = workspace,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardInput = true,
@@ -83,22 +85,20 @@ public static class ProcessRunner
             StandardErrorEncoding = new UTF8Encoding(false)
         };
 
-        if (isWindowsCommandScript)
+        if (isCommandScript)
         {
             startInfo.Arguments =
-                $"/d /s /c \"chcp 65001 >nul & call \"{executable}\" {string.Join(' ', arguments)}\"";
+                $"/d /s /c \"chcp 65001 >nul & call \"{executable}\" {string.Join(' ', Arguments)}\"";
         }
         else
         {
-            foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+            foreach (var argument in Arguments) startInfo.ArgumentList.Add(argument);
         }
         return startInfo;
     }
 
-    private static string ResolveExecutable(string fileName)
+    private static string ResolveCodex()
     {
-        if (Path.IsPathFullyQualified(fileName) && File.Exists(fileName)) return fileName;
-
         var extensions = OperatingSystem.IsWindows()
             ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT")
                 .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
@@ -109,13 +109,12 @@ public static class ProcessRunner
         {
             foreach (var extension in extensions)
             {
-                var candidate = Path.Combine(directory, fileName + extension.ToLowerInvariant());
+                var candidate = Path.Combine(directory, "codex" + extension.ToLowerInvariant());
                 if (File.Exists(candidate)) return candidate;
             }
         }
-        return fileName;
+        return "codex";
     }
-
 
     private static async Task PumpAsync(StreamReader reader, Action<string> write)
     {
@@ -123,37 +122,9 @@ public static class ProcessRunner
     }
 }
 
-public static class CodexRunner
+internal sealed record RunResult(int ExitCode, string? Error)
 {
-    private static readonly string[] SafeArguments =
-    [
-        "exec",
-        "--sandbox", "workspace-write",
-        "--approve-for-me",
-        "--skip-git-repo-check",
-        "--color", "never",
-        "-"
-    ];
-
-    private static readonly string[] UnsafeArguments =
-    [
-        "exec",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--skip-git-repo-check",
-        "--color", "never",
-        "-"
-    ];
-
-    public static Task<ProcessResult> RunAsync(
-        TaskEntry task,
-        CancellationToken cancellationToken) =>
-        ProcessRunner.RunAsync(
-            "codex",
-            task.Item.Unsafe ? UnsafeArguments : SafeArguments,
-            task.Item.WorkspacePath,
-            task.Item.Title,
-            VeloPaths.LogFile(task.Id),
-            cancellationToken);
+    public bool Succeeded => ExitCode == 0;
 }
 
 

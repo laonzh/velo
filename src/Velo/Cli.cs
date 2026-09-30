@@ -1,11 +1,19 @@
-using System.Diagnostics;
-using System.Text;
-
 namespace Velo;
 
 public sealed class Cli
 {
-    private readonly TaskStore _store = new();
+    private readonly Config _config;
+    private readonly WorkQueue _queue;
+    private readonly Workspace _workspace;
+    private readonly AgentRunner _agent;
+
+    public Cli()
+    {
+        _config = Config.Load();
+        _queue = new WorkQueue(_config);
+        _workspace = new Workspace(_config);
+        _agent = new AgentRunner(_config);
+    }
 
     public async Task<int> RunAsync(string[] args)
     {
@@ -15,678 +23,149 @@ public sealed class Cli
             return 0;
         }
 
-        VeloPaths.Initialize();
+        _config.Initialize();
         return args[0] switch
         {
             "add" => await AddAsync(args[1..]),
-            "list" or "ls" => List(args[1..]),
-            "show" => Show(args[1..]),
-            "cancel" => Cancel(args[1..]),
+            "list" => List(args[1..]),
+            "run" => await RunQueueAsync(args[1..]),
             "retry" => Retry(args[1..]),
-            "remove" => await RemoveAsync(args[1..]),
-            "log" or "logs" => await LogsAsync(args[1..]),
-            "start" => await StartAsync(args[1..]),
-            "run" => await RunWorkerAsync(args[1..]),
-            "stop" => Stop(args[1..]),
-            "status" => Status(args[1..]),
+            "logs" => Logs(args[1..]),
             _ => Error($"Unknown command: {args[0]}")
         };
     }
 
     private async Task<int> AddAsync(string[] args)
     {
-        var worktree = false;
-        var unsafeExecution = false;
-        var promptStart = 0;
-        for (; promptStart < args.Length; promptStart++)
-        {
-            switch (args[promptStart])
-            {
-                case "--worktree":
-                    if (worktree)
-                        return Usage("velo add [--worktree] [--unsafe] [--] <prompt>");
-                    worktree = true;
-                    break;
-                case "--unsafe":
-                    if (unsafeExecution)
-                        return Usage("velo add [--worktree] [--unsafe] [--] <prompt>");
-                    unsafeExecution = true;
-                    break;
-                case "--":
-                    promptStart++;
-                    goto OptionsParsed;
-                default:
-                    goto OptionsParsed;
-            }
-        }
+        var worktree = args is ["--worktree", ..];
+        if (worktree) args = args[1..];
 
-OptionsParsed:
-        var title = string.Join(' ', args[promptStart..]).Trim();
-        if (title.Length == 0)
-            return Usage("velo add [--worktree] [--unsafe] [--] <prompt>");
+        var escaped = args is ["--", ..];
+        if (escaped) args = args[1..];
+        if (!escaped && args is [var option, ..]
+            && option.StartsWith("--", StringComparison.Ordinal))
+            return Usage("velo add [--worktree] [--] <prompt>");
 
-        if (!worktree)
-        {
-            var task = _store.Add(title, Environment.CurrentDirectory, unsafeExecution);
-            Console.WriteLine(task.Id);
-            return 0;
-        }
+        var prompt = string.Join(' ', args).Trim();
+        if (prompt.Length == 0)
+            return Usage("velo add [--worktree] [--] <prompt>");
 
-        var id = TaskStore.NewId();
-        var source = Environment.CurrentDirectory;
-        var repository = Path.GetFullPath(
-            (await RunGitAsync(source, "rev-parse", "--show-toplevel")).Trim());
-        var relativePath = Path.GetRelativePath(repository, source);
-        var worktreeRoot = Path.GetFullPath(Path.Combine(VeloPaths.Workspaces, id));
-        await RunGitAsync(
-            repository,
-            "worktree", "add", "-b", $"velo/{id}", worktreeRoot, "HEAD");
-
-        var workspace = relativePath == "."
-            ? worktreeRoot
-            : Path.Combine(worktreeRoot, relativePath);
-        _store.Add(id, title, workspace, unsafeExecution);
+        var id = WorkQueue.NewId();
+        var workspace = worktree
+            ? await _workspace.CreateAsync(id, Environment.CurrentDirectory)
+            : Environment.CurrentDirectory;
+        _queue.Add(id, prompt, workspace);
         Console.WriteLine(id);
         return 0;
     }
 
-    private static async Task<string> RunGitAsync(
-        string workingDirectory,
-        params string[] arguments)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = workingDirectory,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start git.");
-        var outputTask = process.StandardOutput.ReadToEndAsync();
-        var errorTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        var output = await outputTask;
-        var error = await errorTask;
-        if (process.ExitCode != 0)
-        {
-            throw new InvalidOperationException(
-                string.IsNullOrWhiteSpace(error)
-                    ? $"git exited with code {process.ExitCode}."
-                    : error.Trim());
-        }
-        return output;
-    }
-
     private int List(string[] args)
     {
-        TaskState? state = null;
-        if (args.Length != 0)
-        {
-            if (args.Length != 2
-                || args[0] != "--state"
-                || !TryParseTaskState(args[1], out var parsedState))
-            {
-                return Usage("velo list [--state <state>]");
-            }
-            state = parsedState;
-        }
+        var state = args is [var value] && WorkStates.TryParse(value, out var parsed)
+            ? parsed
+            : (WorkState?)null;
+        if (args.Length > 0 && state is null)
+            return Usage("velo list [pending|running|succeeded|failed]");
 
-        var tasks = _store.List()
-            .Where(task => state is null || task.State == state)
+        var work = _queue.List()
+            .Where(item => state is null || item.State == state)
             .ToArray();
-        if (tasks.Length == 0)
+        if (work.Length == 0)
         {
-            Console.WriteLine("No tasks.");
+            Console.WriteLine("No work.");
             return 0;
         }
 
-        Console.WriteLine($"{"ID",-23} {"STATE",-10} {"UPDATED (UTC)",-19} PROMPT");
-        foreach (var task in tasks)
+        Console.WriteLine($"{"ID",-23} {"STATE",-9} {"CREATED (UTC)",-19} PROMPT");
+        foreach (var item in work)
         {
             Console.WriteLine(
-                $"{task.Id,-23} {VeloPaths.StateName(task.State),-10} " +
-                $"{task.Item.UpdatedAtUtc:yyyy-MM-dd HH:mm:ss} {task.Item.Title}");
+                $"{item.Id,-23} {item.State.Text(),-9} {item.CreatedAt:yyyy-MM-dd HH:mm:ss} {item.Summary()}");
         }
         return 0;
     }
 
-    private int Show(string[] args)
+    private async Task<int> RunQueueAsync(string[] args)
     {
-        if (!TryGetId(args, "velo show <id>", out var id)) return 1;
-        var task = _store.Get(id);
-        if (task is null) return Error($"Task not found: {id}");
+        if (args is not [])
+            return Usage("velo run");
 
-        Console.WriteLine($"Id: {task.Id}");
-        Console.WriteLine($"State: {VeloPaths.StateName(task.State)}");
-        Console.WriteLine($"Prompt: {task.Item.Title}");
-        Console.WriteLine($"Workspace: {task.Item.WorkspacePath}");
-        Console.WriteLine($"Execution: {ExecutionPolicyName(task.Item.Unsafe)}");
-        Console.WriteLine($"Created: {task.Item.CreatedAtUtc:O}");
-        Console.WriteLine($"Updated: {task.Item.UpdatedAtUtc:O}");
-        Console.WriteLine($"Log: {VeloPaths.LogFile(task.Id)}");
-        if (!string.IsNullOrWhiteSpace(task.Item.LastError))
-            Console.WriteLine($"Error: {task.Item.LastError}");
-        return 0;
-    }
-
-    private int Cancel(string[] args)
-    {
-        if (!TryGetId(args, "velo cancel <id>", out var id)) return 1;
-        var task = _store.Get(id);
-        if (task is null) return Error($"Task not found: {id}");
-        if (task.State is not (TaskState.Todo or TaskState.Running))
-            return Error($"Task {id} cannot be cancelled from {VeloPaths.StateName(task.State)}.");
-        if (!_store.Cancel(id)) return Error($"Failed to cancel task: {id}");
-        VeloPaths.WriteLog("INFO", $"Task {id} cancelled.");
-        Console.WriteLine($"Cancelled: {id}");
-        return 0;
+        using var cancellation = new CancellationTokenSource();
+        ConsoleCancelEventHandler onCancel = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellation.Cancel();
+        };
+        Console.CancelKeyPress += onCancel;
+        try
+        {
+            await new Orchestrator(
+                _queue,
+                _agent.RunAsync,
+                _config,
+                _config.Concurrency()).RunAsync(cancellation.Token);
+            return 0;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            return 0;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= onCancel;
+        }
     }
 
     private int Retry(string[] args)
     {
-        if (!TryGetId(args, "velo retry <id>", out var id)) return 1;
-        var task = _store.Get(id);
-        if (task is null) return Error($"Task not found: {id}");
-        if (task.State is not (TaskState.Failed or TaskState.Cancelled))
-            return Error($"Task {id} cannot be retried from {VeloPaths.StateName(task.State)}.");
-        if (!_store.Retry(id)) return Error($"Failed to retry task: {id}");
-        Console.WriteLine($"Queued: {id}");
+        if (args is not [var id]) return Usage("velo retry <id>");
+        if (_queue.TryRetry(id)) return 0;
+
+        var work = _queue.Get(id);
+        return Error(work is null
+            ? $"Work not found: {id}"
+            : $"Only failed work can be retried; work is {work.State.Text()}.");
+    }
+
+    private int Logs(string[] args)
+    {
+        if (args is not [var id]) return Usage("velo logs <id>");
+        if (_queue.Get(id) is null) return Error($"Work not found: {id}");
+
+        var path = _config.LogFile(id);
+        if (!File.Exists(path)) return Error($"Work has no log yet: {id}");
+        using var log = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(log);
+        Console.Write(reader.ReadToEnd());
         return 0;
     }
 
-    private async Task<int> RemoveAsync(string[] args)
+    private static void PrintHelp()
     {
-        if (!TryGetId(args, "velo remove <id>", out var id)) return 1;
-        var task = _store.Get(id);
-        if (task is null) return Error($"Task not found: {id}");
-        if (task.State is not (TaskState.Done or TaskState.Failed or TaskState.Cancelled))
-            return Error($"Task {id} cannot be removed from {VeloPaths.StateName(task.State)}.");
+        Console.WriteLine("""
+            Usage:
+              velo add [--worktree] [--] <prompt>
+              velo list [pending|running|succeeded|failed]
+              velo run
+              velo retry <id>
+              velo logs <id>
 
-        var managedWorktree = TryGetManagedWorktreeRoot(task, out var worktreeRoot);
-        if (managedWorktree && Directory.Exists(worktreeRoot))
-        {
-            var status = await RunGitAsync(worktreeRoot, "status", "--porcelain");
-            if (!string.IsNullOrWhiteSpace(status))
-                return Error($"Managed worktree has uncommitted changes: {worktreeRoot}");
-
-            var commonDirectory = (await RunGitAsync(
-                worktreeRoot,
-                "rev-parse", "--git-common-dir")).Trim();
-            if (!Path.IsPathRooted(commonDirectory))
-                commonDirectory = Path.GetFullPath(commonDirectory, worktreeRoot);
-            var repository = Directory.GetParent(commonDirectory)?.FullName
-                ?? throw new InvalidOperationException(
-                    $"Cannot locate the source repository for worktree: {worktreeRoot}");
-
-            await RunGitAsync(repository, "worktree", "remove", worktreeRoot);
-        }
-
-        var logPath = VeloPaths.LogFile(id);
-        try
-        {
-            File.Delete(logPath);
-        }
-        catch (IOException ex)
-        {
-            return Error($"Failed to remove task log: {ex.Message}");
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Error($"Failed to remove task log: {ex.Message}");
-        }
-
-        if (!_store.Remove(id, task.State))
-            return Error($"Failed to remove task: {id}");
-
-        Console.WriteLine($"Removed task: {id}");
-        if (managedWorktree) Console.WriteLine($"Kept branch: velo/{id}");
-        return 0;
-    }
-
-    private static bool TryGetManagedWorktreeRoot(TaskEntry task, out string root)
-    {
-        root = Path.GetFullPath(Path.Combine(VeloPaths.Workspaces, task.Id));
-        var workspace = Path.GetFullPath(task.Item.WorkspacePath);
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        return workspace.Equals(root, comparison)
-            || workspace.StartsWith(root + Path.DirectorySeparatorChar, comparison);
-    }
-    private async Task<int> LogsAsync(string[] args)
-    {
-        string? id = null;
-        var tail = false;
-        foreach (var arg in args)
-        {
-            if (arg == "--tail")
-            {
-                if (tail) return Usage("velo logs [<id>] [--tail]");
-                tail = true;
-            }
-            else if (arg.StartsWith('-') || id is not null)
-            {
-                return Usage("velo logs [<id>] [--tail]");
-            }
-            else
-            {
-                id = arg;
-            }
-        }
-
-        if (id is not null && _store.Get(id) is null) return Error($"Task not found: {id}");
-        var path = id is null ? VeloPaths.VeloLog : VeloPaths.LogFile(id);
-        if (!File.Exists(path)) return Error($"Log not found: {path}");
-
-        if (!tail)
-        {
-            using var stream = OpenLog(path);
-            using var reader = new StreamReader(stream);
-            Console.Write(await reader.ReadToEndAsync());
-            return 0;
-        }
-
-        using var cancellation = new CancellationTokenSource();
-        Console.CancelKeyPress += OnCancel;
-        try
-        {
-            await TailAsync(path, cancellation.Token);
-        }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-        {
-        }
-        finally
-        {
-            Console.CancelKeyPress -= OnCancel;
-        }
-        return 0;
-
-        void OnCancel(object? sender, ConsoleCancelEventArgs e)
-        {
-            e.Cancel = true;
-            cancellation.Cancel();
-        }
-    }
-
-    private static async Task TailAsync(string path, CancellationToken cancellationToken)
-    {
-        using var stream = OpenLog(path);
-        using var reader = new StreamReader(stream);
-        var lines = new Queue<string>(20);
-        while (await reader.ReadLineAsync(cancellationToken) is { } line)
-        {
-            if (lines.Count == 20) lines.Dequeue();
-            lines.Enqueue(line);
-        }
-        foreach (var line in lines) Console.WriteLine(line);
-
-        while (true)
-        {
-            while (await reader.ReadLineAsync(cancellationToken) is { } line)
-                Console.WriteLine(line);
-            await Task.Delay(250, cancellationToken);
-        }
-    }
-
-    private static FileStream OpenLog(string path) => new(
-        path,
-        FileMode.Open,
-        FileAccess.Read,
-        FileShare.ReadWrite | FileShare.Delete);
-
-    private async Task<int> StartAsync(string[] args)
-    {
-        if (!TryParseWorkerOptions(args, out var concurrency, out var timeout)) return 1;
-        if (GetRunningPid() > 0) return Error("Velo is already running.");
-
-        try { File.Delete(VeloPaths.StopFile); } catch (IOException) { }
-        var startInfo = CreateSelfStartInfo("run", concurrency, timeout);
-        var process = Process.Start(startInfo);
-        if (process is null) return Error("Failed to start Velo.");
-
-        var deadline = DateTime.UtcNow.AddSeconds(3);
-        while (DateTime.UtcNow < deadline && !process.HasExited)
-        {
-            if (GetRunningPid() == process.Id)
-            {
-                Console.WriteLine($"Velo started with pid {process.Id}.");
-                return 0;
-            }
-            await Task.Delay(50);
-        }
-
-        return Error(process.HasExited
-            ? "Velo failed to start."
-            : "Velo did not become ready in time.");
-    }
-
-    private async Task<int> RunWorkerAsync(string[] args)
-    {
-        if (!TryParseWorkerOptions(args, out var concurrency, out var timeout)) return 1;
-
-        using var pidFile = AcquirePidFile();
-        if (pidFile is null) return Error("Velo is already running.");
-        File.Delete(VeloPaths.StopFile);
-
-        using (var writer = new StreamWriter(pidFile, Encoding.ASCII, leaveOpen: true))
-        {
-            pidFile.SetLength(0);
-            writer.Write(Environment.ProcessId);
-            writer.Flush();
-        }
-
-        using var cancellation = new CancellationTokenSource();
-        Console.CancelKeyPress += OnCancel;
-        var stopMonitor = MonitorStopFileAsync(cancellation);
-        try
-        {
-            await new Worker(_store, concurrency, timeout).RunAsync(cancellation.Token);
-        }
-        finally
-        {
-            cancellation.Cancel();
-            await stopMonitor;
-            Console.CancelKeyPress -= OnCancel;
-            pidFile.Dispose();
-            File.Delete(VeloPaths.PidFile);
-            File.Delete(VeloPaths.StopFile);
-        }
-        return 0;
-
-        void OnCancel(object? sender, ConsoleCancelEventArgs e)
-        {
-            e.Cancel = true;
-            cancellation.Cancel();
-        }
-    }
-
-    private static int Stop(string[] args)
-    {
-        if (args.Length != 0) return Usage("velo stop");
-        var pid = GetRunningPid();
-        if (pid <= 0)
-        {
-            Console.WriteLine("Velo is not running.");
-            return 0;
-        }
-
-        File.WriteAllText(VeloPaths.StopFile, string.Empty);
-        try
-        {
-            using var process = Process.GetProcessById(pid);
-            if (!process.WaitForExit(10_000)) process.Kill(entireProcessTree: true);
-        }
-        catch (ArgumentException)
-        {
-        }
-        Console.WriteLine("Velo stopped.");
-        return 0;
-    }
-
-    private int Status(string[] args)
-    {
-        if (args.Length != 0) return Usage("velo status");
-        var pid = GetRunningPid();
-        Console.WriteLine(pid > 0 ? $"Velo is running with pid {pid}." : "Velo is not running.");
-
-        var tasks = _store.List();
-        Console.WriteLine(
-            $"Tasks: todo={tasks.Count(task => task.State == TaskState.Todo)} " +
-            $"running={tasks.Count(task => task.State == TaskState.Running)} " +
-            $"done={tasks.Count(task => task.State == TaskState.Done)} " +
-            $"failed={tasks.Count(task => task.State == TaskState.Failed)} " +
-            $"cancelled={tasks.Count(task => task.State == TaskState.Cancelled)}");
-        return 0;
-    }
-
-    private static async Task MonitorStopFileAsync(CancellationTokenSource cancellation)
-    {
-        try
-        {
-            while (!cancellation.IsCancellationRequested)
-            {
-                if (File.Exists(VeloPaths.StopFile))
-                {
-                    cancellation.Cancel();
-                    return;
-                }
-                await Task.Delay(250, cancellation.Token);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-    }
-
-    private static FileStream? AcquirePidFile()
-    {
-        try
-        {
-            return new FileStream(
-                VeloPaths.PidFile,
-                FileMode.Create,
-                FileAccess.ReadWrite,
-                FileShare.Read);
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-    }
-
-    private static int GetRunningPid()
-    {
-        if (!File.Exists(VeloPaths.PidFile)) return 0;
-        if (!PidFileHasActiveOwner())
-        {
-            DeleteStalePidFile();
-            return 0;
-        }
-
-        try
-        {
-            using var stream = new FileStream(
-                VeloPaths.PidFile,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream);
-            if (!int.TryParse(reader.ReadToEnd(), out var pid) || pid <= 0) return 0;
-            using var process = Process.GetProcessById(pid);
-            return process.HasExited ? 0 : pid;
-        }
-        catch
-        {
-            return 0;
-        }
-    }
-
-    private static bool PidFileHasActiveOwner()
-    {
-        try
-        {
-            using var stream = new FileStream(
-                VeloPaths.PidFile,
-                FileMode.Open,
-                FileAccess.Write,
-                FileShare.ReadWrite | FileShare.Delete);
-            return false;
-        }
-        catch (FileNotFoundException)
-        {
-            return false;
-        }
-        catch (IOException ex) when (IsSharingViolation(ex))
-        {
-            return true;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-    }
-
-    private static bool IsSharingViolation(IOException exception)
-    {
-        var errorCode = exception.HResult & 0xffff;
-        return errorCode is 32 or 33;
-    }
-
-    private static void DeleteStalePidFile()
-    {
-        try { File.Delete(VeloPaths.PidFile); }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-    }
-
-    private static ProcessStartInfo CreateSelfStartInfo(
-        string command,
-        int concurrency,
-        TimeSpan timeout)
-    {
-        var executable = Environment.ProcessPath
-            ?? throw new InvalidOperationException("Cannot locate the Velo executable.");
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = executable,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        if (string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase))
-            startInfo.ArgumentList.Add(Environment.GetCommandLineArgs()[0]);
-
-        startInfo.ArgumentList.Add(command);
-        startInfo.ArgumentList.Add("--concurrency");
-        startInfo.ArgumentList.Add(concurrency.ToString());
-        startInfo.ArgumentList.Add("--timeout");
-        startInfo.ArgumentList.Add(timeout.ToString("c"));
-        return startInfo;
-    }
-
-    private static bool TryParseWorkerOptions(
-        string[] args,
-        out int concurrency,
-        out TimeSpan timeout)
-    {
-        concurrency = 1;
-        timeout = TimeSpan.FromMinutes(30);
-
-        for (var i = 0; i < args.Length; i++)
-        {
-            if (i + 1 >= args.Length)
-            {
-                Error($"Missing value for {args[i]}.");
-                return false;
-            }
-
-            var value = args[++i];
-            switch (args[i - 1])
-            {
-                case "--concurrency":
-                    if (!int.TryParse(value, out concurrency) || concurrency <= 0)
-                    {
-                        Error("Concurrency must be a positive integer.");
-                        return false;
-                    }
-                    break;
-                case "--timeout":
-                    if (!TimeSpan.TryParse(value, out timeout) || timeout <= TimeSpan.Zero)
-                    {
-                        Error("Timeout must be a positive TimeSpan.");
-                        return false;
-                    }
-                    break;
-                default:
-                    Error($"Unknown option: {args[i - 1]}");
-                    return false;
-            }
-        }
-        return true;
-    }
-
-    private static bool TryParseTaskState(string value, out TaskState state)
-    {
-        foreach (var candidate in Enum.GetValues<TaskState>())
-        {
-            if (value == VeloPaths.StateName(candidate))
-            {
-                state = candidate;
-                return true;
-            }
-        }
-
-        state = default;
-        return false;
-    }
-
-    private static bool TryGetId(string[] args, string usage, out string id)
-    {
-        if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
-        {
-            id = string.Empty;
-            Usage(usage);
-            return false;
-        }
-        id = args[0];
-        return true;
-    }
-
-    private static string ExecutionPolicyName(bool unsafeExecution) => unsafeExecution
-        ? "unsafe (approvals and sandbox bypassed)"
-        : "safe (workspace-write sandbox with automatic approval review)";
-
-    private static int Error(string message)
-    {
-        Console.Error.WriteLine($"Error: {message}");
-        return 1;
+            Defaults:
+              Codex runs with the workspace-write sandbox.
+              Concurrency is 2; set VELO_CONCURRENCY to change it.
+              Worktrees are created below ~/.velo/workspaces and are retained.
+            """);
     }
 
     private static int Usage(string usage)
     {
         Console.Error.WriteLine($"Usage: {usage}");
-        return 1;
+        return 2;
     }
 
-    private static void PrintHelp()
+    private static int Error(string message)
     {
-        Console.WriteLine("Usage: velo <command> [options]");
-        Console.WriteLine();
-        Console.WriteLine("Commands:");
-        Console.WriteLine("  add [--worktree] [--unsafe] [--] <prompt>");
-        Console.WriteLine("                     Add a task for the current or a new Git worktree workspace");
-        Console.WriteLine("  list [--state <state>]");
-        Console.WriteLine("                     List all tasks or filter by one state");
-        Console.WriteLine("  show <id>          Show task details");
-        Console.WriteLine("  cancel <id>        Cancel a queued or running task");
-        Console.WriteLine("  retry <id>         Retry a failed or cancelled task");
-        Console.WriteLine("  remove <id>        Remove a terminal task and its managed files");
-        Console.WriteLine("  logs [<id>]        Show Velo or task logs (--tail to follow)");
-        Console.WriteLine("  start [options]    Start the background worker");
-        Console.WriteLine("  stop               Stop the background worker");
-        Console.WriteLine("  status             Show worker status");
-        Console.WriteLine();
-        Console.WriteLine("Start options:");
-        Console.WriteLine("  --concurrency <n>  Maximum concurrent tasks (default: 1)");
-        Console.WriteLine("  --timeout <span>   Timeout per task (default: 00:30:00)");
-        Console.WriteLine();
-        Console.WriteLine("Add options:");
-        Console.WriteLine("  --worktree        Create an isolated Git worktree for the task");
-        Console.WriteLine("  --unsafe          Bypass Codex approvals and sandbox (dangerous)");
-        Console.WriteLine("  --                Treat remaining arguments as the prompt");
-        Console.WriteLine();
-        Console.WriteLine("List options:");
-        Console.WriteLine("  --state <state>   Filter by todo, running, done, failed, or cancelled");
+        Console.Error.WriteLine($"Error: {message}");
+        return 1;
     }
 }
