@@ -13,8 +13,13 @@ internal sealed class Config
     public string Workspaces => Path.Combine(Home, "workspaces");
     public string RunLock => Path.Combine(Home, "run.lock");
     public string QueueLock => Path.Combine(Home, "queue.lock");
+    public string PidFile => Path.Combine(Home, "start.pid");
+    public string StopRequest => Path.Combine(Home, "stop.request");
+    public string StartLog => Path.Combine(Home, "start.log");
+    public string TokenFile => Path.Combine(Home, "start.token");
 
     public string WorkFile(string id) => Path.Combine(Work, id + ".json");
+    public string ReviewLock(string id) => Path.Combine(Work, id + ".review.lock");
     public string LogFile(string id) => Path.Combine(Logs, id + ".log");
     public string WorkspacePath(string id) => Path.Combine(Workspaces, id);
 

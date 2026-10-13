@@ -59,7 +59,13 @@ internal sealed class CliFixture : IAsyncDisposable
         string workingDirectory,
         int? concurrency = 2,
         string? veloHome = null) =>
-        Start(workingDirectory, ["run"], concurrency, veloHome);
+        Start(workingDirectory, ["start", "--once"], concurrency, veloHome);
+
+    public Process StartWatching(string workingDirectory, int? concurrency = 2) =>
+        Start(workingDirectory, ["start"], concurrency);
+
+    public Process StartServing(string workingDirectory, int port, int? concurrency = 2, string? path = null) =>
+        Start(workingDirectory, ["start", "--port", port.ToString()], concurrency, path: path);
 
     public Task WaitForFileAsync(string path) => WaitUntilAsync(
         () => File.Exists(path),
@@ -72,7 +78,10 @@ internal sealed class CliFixture : IAsyncDisposable
         {
             try
             {
-                return await File.ReadAllTextAsync(path);
+                // A running Velo process may hold the file open, and replaces it by moving a new copy over it.
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return await reader.ReadToEndAsync();
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
@@ -111,7 +120,8 @@ internal sealed class CliFixture : IAsyncDisposable
         string workingDirectory,
         IReadOnlyList<string> arguments,
         int? concurrency = null,
-        string? veloHome = null)
+        string? veloHome = null,
+        string? path = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -127,8 +137,9 @@ internal sealed class CliFixture : IAsyncDisposable
         startInfo.Environment["VELO_HOME"] = veloHome ?? VeloHome;
         if (concurrency is not null)
             startInfo.Environment["VELO_CONCURRENCY"] = concurrency.Value.ToString();
-        startInfo.Environment["PATH"] =
-            _fakeBin + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+        // A path override lets a test run Velo where git cannot be found.
+        startInfo.Environment["PATH"] = path
+            ?? _fakeBin + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
         return Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start Velo.");
     }

@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace Velo;
 
-internal static class FileLock
+internal static partial class FileLock
 {
     private const int LockExclusive = 0x2;
     private const int LockNonBlocking = 0x4;
@@ -15,10 +15,30 @@ internal static class FileLock
 
     public static FileStream OpenExclusive(string path)
     {
+        // Lock holds are short, but back off so a waiter does not spin at a fixed 1 ms.
+        var delay = 1;
         while (true)
         {
             try { return Open(path); }
-            catch (IOException) { Thread.Sleep(1); }
+            catch (IOException)
+            {
+                Thread.Sleep(delay);
+                delay = Math.Min(delay * 2, 20);
+            }
+        }
+    }
+
+    public static async Task<FileStream> OpenExclusiveAsync(string path)
+    {
+        var delay = 1;
+        while (true)
+        {
+            try { return Open(path); }
+            catch (IOException)
+            {
+                await Task.Delay(delay);
+                delay = Math.Min(delay * 2, 20);
+            }
         }
     }
 
@@ -47,6 +67,6 @@ internal static class FileLock
         }
     }
 
-    [DllImport("libc", SetLastError = true)]
-    private static extern int flock(nint fd, int operation);
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int flock(nint fd, int operation);
 }

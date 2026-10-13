@@ -29,17 +29,36 @@ internal static class WorkStates
 }
 
 internal sealed record WorkItem(
-    string Id,
-    WorkState State,
-    string Prompt,
-    string Workspace,
-    DateTimeOffset CreatedAt,
-    string? Error = null)
+    [property: JsonRequired] string Id,
+    [property: JsonRequired] WorkState State,
+    [property: JsonRequired] string Prompt,
+    [property: JsonRequired] string Workspace,
+    [property: JsonRequired] DateTimeOffset CreatedAt,
+    string? Error = null,
+    int Attempts = 0,
+    DateTimeOffset? StartedAt = null,
+    DateTimeOffset? FinishedAt = null,
+    int? ExitCode = null,
+    bool CancelRequested = false,
+    // Set only for work that runs in its own worktree: the repository it was created from and
+    // the commit that worktree started at.
+    string? Repository = null,
+    string? BaseCommit = null,
+    bool Discarded = false,
+    // Set once the changes were applied to Repository. The worktree stays until it is discarded.
+    bool Accepted = false)
 {
+    [JsonIgnore]
+    public string Title => Prompt.Split('\n').First().Trim();
+
+    // Only succeeded worktree work can be reviewed or discarded. A discarded worktree is gone.
+    public bool CanReview() =>
+        State == WorkState.Succeeded && Repository is not null && BaseCommit is not null && !Discarded;
+
     public string Summary()
     {
-        var firstLine = Prompt.Split('\n').First().Trim();
-        return firstLine.Length <= 60 ? firstLine : firstLine[..57] + "...";
+        var title = Title;
+        return title.Length <= 60 ? title : title[..57] + "...";
     }
 }
 

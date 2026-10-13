@@ -67,8 +67,8 @@ try {
     Set-Content -LiteralPath (Join-Path $fakeBin 'codex.cmd') `
         -Value '@echo off', 'more > codex-ran.txt' -Encoding ascii
 
-    if (-not (Invoke-Velo @('--help')).Contains('velo run')) {
-        throw 'Published executable did not expose the run command.'
+    if (-not (Invoke-Velo @('--help')).Contains('velo start [--once]')) {
+        throw 'Published executable did not expose the start command.'
     }
 
     $workId = (Invoke-Velo @('add', '--', 'native-aot-smoke')).Trim()
@@ -76,7 +76,7 @@ try {
         throw 'Published executable did not return a work ID.'
     }
 
-    [void] (Invoke-Velo @('run'))
+    [void] (Invoke-Velo @('start', '--once'))
     $work = Get-Content -LiteralPath (Join-Path $veloHome "work\$workId.json") -Raw |
         ConvertFrom-Json
     if ($work.state -ne 'succeeded') {

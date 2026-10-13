@@ -6,12 +6,20 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PublishAot>true</PublishAot>
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <InternalsVisibleTo Include="Velo.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Web\index.html" LogicalName="index.html" />
+    <EmbeddedResource Include="Web\dashboard.js" LogicalName="dashboard.js" />
+    <EmbeddedResource Include="Web\dashboard.css" LogicalName="dashboard.css" />
   </ItemGroup>
 
 </Project>
