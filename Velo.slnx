@@ -1,5 +1,9 @@
 <Solution>
-  <Project Path="src/Velo/Velo.csproj" />
-  <Project Path="tests/Velo.FakeCodex/Velo.FakeCodex.csproj" />
-  <Project Path="tests/Velo.Tests/Velo.Tests.csproj" />
+  <Folder Name="/src/">
+    <Project Path="src/Velo/Velo.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FakeCodex/FakeCodex.csproj" />
+    <Project Path="tests/Velo.Tests/Velo.Tests.csproj" />
+  </Folder>
 </Solution>

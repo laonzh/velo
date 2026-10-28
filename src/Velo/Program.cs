@@ -1,15 +1,2 @@
-using Velo;
-
-try
-{
-    return await new Cli().RunAsync(args);
-}
-catch (OperationCanceledException)
-{
-    return 0;
-}
-catch (Exception ex)
-{
-    Console.Error.WriteLine($"Error: {ex.Message}");
-    return 1;
-}
+// Entry point: everything is a CLI command; `velo serve` runs the server (Cli.cs, Server.cs).
+return await Velo.Cli.RunAsync(args);

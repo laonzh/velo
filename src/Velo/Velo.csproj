@@ -1,25 +1,28 @@
-<Project Sdk="Microsoft.NET.Sdk">
-
+<Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <AssemblyName>velo</AssemblyName>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Velo</RootNamespace>
     <PublishAot>true</PublishAot>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <!-- AOT / trim analyzer findings in our own code are release blockers. -->
+    <WarningsAsErrors>$(WarningsAsErrors);IL2026;IL3050</WarningsAsErrors>
+    <!-- wwwroot is embedded as resources (StaticWeb.Map), not served from disk: no content items, no static-web-assets pipeline
+         (it would only emit an unused velo.staticwebassets.endpoints.json next to the exe). -->
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+    <!-- Release package = velo.exe only; symbols stay in bin/obj. -->
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+    <PublishReferencesSymbols>false</PublishReferencesSymbols>
   </PropertyGroup>
-
   <ItemGroup>
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!-- Embedded Web UI: logical names are web/<path relative to wwwroot> (looked up with '/' separators). -->
+    <EmbeddedResource Include="wwwroot\**\*" LogicalName="web/%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Remove="wwwroot\**\*" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="Velo.Tests" />
   </ItemGroup>
-
-  <ItemGroup>
-    <EmbeddedResource Include="Web\index.html" LogicalName="index.html" />
-    <EmbeddedResource Include="Web\dashboard.js" LogicalName="dashboard.js" />
-    <EmbeddedResource Include="Web\dashboard.css" LogicalName="dashboard.css" />
-  </ItemGroup>
-
 </Project>

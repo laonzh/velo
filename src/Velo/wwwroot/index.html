@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Velo</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="topbar">
+  <b>Velo</b>
+  <span class="spacer"></span>
+  <input id="search" type="search" placeholder="Filter…" autocomplete="off" spellcheck="false" hidden>
+  <button id="badge" class="badge" hidden title="Jump to the list"></button>
+  <span id="conn" class="conn" title="online"></span>
+</header>
+<div id="offline" class="offline" hidden>Server unreachable — retrying…</div>
+<main>
+  <form id="newform" class="newcard" autocomplete="off">
+    <input id="nt-title" name="title" class="nt-title" placeholder="What needs to be done?" required>
+    <textarea name="description" class="nt-desc" rows="3" placeholder="Description — desired result, constraints, how to verify" hidden></textarea>
+    <div class="nt-bar">
+      <div class="nt-row">
+        <input name="directory" class="nt-dir mono" placeholder="Directory — absolute path to a git repo (optional)" spellcheck="false">
+        <button type="button" id="nt-desc-btn" class="ghost sm" title="Add a description">+ Description</button>
+      </div>
+      <div class="nt-row">
+        <div id="nt-model" class="nt-model"></div>
+        <div id="nt-effort" class="seg"></div>
+        <span class="spacer"></span>
+        <button type="submit" id="nt-create" class="primary" disabled>Create <span class="kbd">↵</span></button>
+      </div>
+    </div>
+  </form>
+  <section id="welcome" class="welcome" hidden>
+    <ol class="steps">
+      <li><span class="num">1</span><div><b>Describe</b><p>One line is enough. Add a directory to work inside a git repo.</p></div></li>
+      <li><span class="num">2</span><div><b>Velo runs it</b><p>The agent works in an isolated workspace, so your checkout stays clean.</p></div></li>
+      <li><span class="num">3</span><div><b>You decide</b><p>Review the changes, then approve to merge — or add a note and run again.</p></div></li>
+    </ol>
+    <div class="examples">
+      <span class="muted small">Try</span>
+      <button type="button" class="ex">Fix the failing tests</button>
+      <button type="button" class="ex">Add input validation to the signup form</button>
+      <button type="button" class="ex">Summarize this repository's architecture</button>
+    </div>
+    <p class="keys muted small"><span class="kbd">n</span> new task · <span class="kbd">/</span> filter · <span class="kbd">Esc</span> close</p>
+  </section>
+  <p id="caught" class="caught muted" hidden>Nothing needs your attention.</p>
+  <div id="list"></div>
+  <p id="empty" class="empty muted" hidden></p>
+</main>
+<aside id="detail" hidden></aside>
+<div id="toast" class="alert" hidden></div>
+<noscript><p style="padding:1rem">The Velo web UI needs JavaScript.</p></noscript>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
